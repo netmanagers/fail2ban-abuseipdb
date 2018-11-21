@@ -1,13 +1,12 @@
-=============================
 Fail2ban filter for AbuseIPDB
 =============================
 
 This script is a refactoring and extension of the script written by
-`Fanjoe <https://www.fanjoe.be/?p=3185>`_.
+[Fanjoe and published in this blog entry](https://www.fanjoe.be/?p=3185).
 
 It takes the current incoming connections to the host where the script is run,
-checks those IPs against the `AbuseIP Database <https://www.abuseipdb.com/>`
-and blocks them in `Fail2Ban <https://www.fail2ban.org>`_.
+checks those IPs against the [AbuseIP Database](https://www.abuseipdb.com/>) 
+and blocks them in [Fail2Ban](https://www.fail2ban.org).
 
 It allows you to set
 
@@ -41,10 +40,12 @@ system:
 ``Installing and using the script``
 -----------------------------------
 
-# Download and install the script somewhere in your $PATH and make it executable,
-  ie. `/usr/local/bin/fail2ban_abuseipdb_filter`.
-# Modify it to suit your needs, particularly, the `abuseipdb_api_key` variable.
-# Add the fail2ban jail
+1. Download and install the script somewhere in your $PATH and make it executable,
+   ie. `/usr/local/bin/fail2ban_abuseipdb_filter`.
+
+2. Modify it to suit your needs, particularly, the `abuseipdb_api_key` variable.
+
+3. Add the fail2ban jail
 ```
 cat >> /etc/fail2ban/jail.local << EOF
 [banabuseip]
@@ -54,7 +55,8 @@ logpath = /var/log/banabuseip.log
 port = 22
 EOF
 ```
-# Add the fail2ban filter
+
+4. Add the fail2ban filter
 ```
 cat >> /etc/fail2ban/filter.d/banabuseip.local << EOF
 [Definition]
@@ -62,9 +64,11 @@ failregex =
 ignoreregex =
 EOF
 ```
-# Add a cron entry to run this script regularly
+
+5. Add a cron entry to run this script regularly
 ```
 crontab -e
+```
 ```
 */3 * * * * /usr/local/bin/fail2ban_abuseipdb_filter >> /var/log/banabuseip.log
 ```
