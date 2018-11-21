@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# This file is managed with Salt
+
+# Adapted from https://www.fanjoe.be/?p=3185
+# Now uses jq to analyze all on a single pass
+
+# Verify we're running as root
+if [[ $EUID -ne 0 ]]; then
+    echo "This scrip needs to run with root privileges"
+    exit 1
+fi
+ 
+abuseipdb_api_key="Your_AbuseIPDB_key_here"
+
+whitelist_array=(
+    "127.0.0.1"
+    "::1"
+)
+
+# Ports to monitor, egrep suitable list
+# ie ports=":22|:80|:443"
+ports=":22"
+
+# Confidence threshold above which we block
+confidence_threshold=40
+
+# "not reported"s simple cache
+# In order to avoid hitting the limit in abuseipdb query api, we skip checking "not reported ips"
+# this much time.
+not_reported_cache_file="/tmp/banabuseip_not_reported_cache"
+# In seconds
+cache_threshold=14400 # 4 hs
+
+curl_timeout="6s"
+
+# Target we use in iptables to block IPs
+iptables_target="REJECT"
+
+# We're skipping ipv6 checks for the moment. Need some review on their management
+my_array=( $(netstat -tn 2>/dev/null | egrep ${ports} | awk '{print $5}' | rev | cut -d: -f2- | rev | grep -v : | sort -unr | head) )
+
+current_time=$(date +%s)
+touch ${not_reported_cache_file}
+
+is_whitelisted() {
+    local e match="$1"
+    shift
+    for e; do
+        [[ "$e" == "$match" ]] && return 0
+    done
+    return 1
+}
+
+for ip in ${my_array[@]}; do
+    if is_whitelisted "${ip}" "${whitelist_array[@]}"; then
+        continue
+    fi
+
+    # See if ip was already checked and was not reported
+    in_not_reported_cache=$(grep ${ip} ${not_reported_cache_file} | tail -1 )
+    if [[ ${in_not_reported_cache} != "" ]]; then
+        last_check=$(echo ${in_not_reported_cache} |awk '{print $1}')
+        if [[ ${current_time} -lt $(( last_check+cache_threshold)) ]]; then
+            # We already checked it and check didn't expire in our threshold time
+            continue
+        fi
+    fi
+
+    if iptables -n -L |grep ${iptables_target} | grep -q ${ip}; then
+        echo "$(date +"%b %d %H:%M:%S") ${ip}: found ${iptables_chain} rule with this IP, skipping."
+        continue
+    fi
+
+    curl_result=$(timeout -s SIGINT ${curl_timeout} curl -s "https://www.abuseipdb.com/check/${ip}/json?key=$abuseipdb_api_key")
+    if [ "$curl_result" == "[]" ]; then
+        echo "$(date +"%b %d %H:%M:%S") ${ip}: not reported."
+        echo "${current_time} ${ip}" >> ${not_reported_cache_file}
+        continue
+    fi
+
+    # We use the newest report if they're multiple, or the only one available.
+    abuse_confidence=$(echo ${curl_result} | jq 'if type == "object" then .abuseConfidenceScore? else .[0]?.abuseConfidenceScore? end')
+    if [[ "${abuse_confidence}" == "" ]] || [[ "${abuse_confidence}" == "null" ]]; then
+        echo "$(date +"%b %d %H:%M:%S") ${ip}: curl check failed."
+        continue
+    fi
+
+    if [ $abuse_confidence -le ${confidence_threshold} ]; then
+        echo "$(date +"%b %d %H:%M:%S") ${ip}: reported, confidence below threshold: ${abuse_confidence}%."
+        continue
+    fi
+
+    if fail2ban-client set banabuseip banip ${ip} >/dev/null; then 
+        echo "$(date +"%b %d %H:%M:%S") ${ip}: blocked, last report's confidence: ${abuse_confidence}%."
+    else
+        echo "$(date +"%b %d %H:%M:%S") ${ip}: WARNING: fail2ban failed to block it."
+    fi
+done
